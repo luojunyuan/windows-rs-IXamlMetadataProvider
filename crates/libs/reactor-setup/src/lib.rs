@@ -137,7 +137,7 @@ fn ensure_msix_extracted(runtime: &Path) -> PathBuf {
         .join("MSIX")
         .join(&arch)
         .join("Microsoft.WindowsAppRuntime.2.msix");
-    let extract = runtime.join(".msix_extract");
+    let extract = runtime.join(format!(".msix_extract_{arch}"));
     if !extract.is_dir() {
         let _ = fs::create_dir_all(&extract);
         if !msix.is_file() {
