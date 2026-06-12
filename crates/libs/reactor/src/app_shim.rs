@@ -7,8 +7,16 @@ implement_decl! {
     impl ReactorApplicationOverrides as pub ReactorApplicationOverrides_Impl: [IApplicationOverrides, IXamlMetadataProvider]
 }
 
+type XamlMetadataProviderFactory = Box<dyn Fn() -> Result<IInspectable>>;
+
+thread_local! {
+    static XAML_METADATA_PROVIDER_FACTORIES: RefCell<Vec<XamlMetadataProviderFactory>> =
+        const { RefCell::new(Vec::new()) };
+}
+
 pub struct ReactorApplicationOverrides {
     controls_provider: RefCell<Option<XamlControlsXamlMetaDataProvider>>,
+    external_providers: RefCell<Option<Vec<IXamlMetadataProvider>>>,
     on_launched: RefCell<Option<Box<dyn FnOnce() -> Result<()>>>>,
 }
 
@@ -16,6 +24,7 @@ impl ReactorApplicationOverrides {
     fn new(on_launched: Box<dyn FnOnce() -> Result<()>>) -> Self {
         Self {
             controls_provider: RefCell::new(None),
+            external_providers: RefCell::new(None),
             on_launched: RefCell::new(Some(on_launched)),
         }
     }
@@ -28,6 +37,31 @@ impl ReactorApplicationOverrides {
         *self.controls_provider.borrow_mut() = Some(p.clone());
         Ok(p)
     }
+
+    fn external_providers(&self) -> Result<Vec<IXamlMetadataProvider>> {
+        if let Some(providers) = self.external_providers.borrow().as_ref() {
+            return Ok(providers.clone());
+        }
+
+        let providers = XAML_METADATA_PROVIDER_FACTORIES.with(|factories| {
+            factories
+                .borrow()
+                .iter()
+                .map(|factory| factory()?.cast())
+                .collect::<Result<Vec<IXamlMetadataProvider>>>()
+        })?;
+        *self.external_providers.borrow_mut() = Some(providers.clone());
+        Ok(providers)
+    }
+}
+
+pub(crate) fn register_xaml_metadata_provider_factory<F>(factory: F)
+where
+    F: Fn() -> Result<IInspectable> + 'static,
+{
+    XAML_METADATA_PROVIDER_FACTORIES.with(|factories| {
+        factories.borrow_mut().push(Box::new(factory));
+    });
 }
 
 impl IApplicationOverrides_Impl for ReactorApplicationOverrides_Impl {
@@ -42,13 +76,33 @@ impl IApplicationOverrides_Impl for ReactorApplicationOverrides_Impl {
 impl IXamlMetadataProvider_Impl for ReactorApplicationOverrides_Impl {
     fn GetXamlType(&self, r#type: &TypeName) -> Result<IXamlType> {
         let provider: IXamlMetadataProvider = self.provider()?.cast()?;
-        provider.GetXamlType(r#type)
+        match provider.GetXamlType(r#type) {
+            Ok(xaml_type) => Ok(xaml_type),
+            Err(primary_error) => {
+                for provider in self.external_providers()? {
+                    if let Ok(xaml_type) = provider.GetXamlType(r#type) {
+                        return Ok(xaml_type);
+                    }
+                }
+                Err(primary_error)
+            }
+        }
     }
 
     fn GetXamlTypeByFullName(&self, full_name: &windows_core::HSTRING) -> Result<IXamlType> {
         let provider: IXamlMetadataProvider = self.provider()?.cast()?;
         let full_name = full_name.to_string_lossy();
-        provider.GetXamlTypeByFullName(&full_name)
+        match provider.GetXamlTypeByFullName(&full_name) {
+            Ok(xaml_type) => Ok(xaml_type),
+            Err(primary_error) => {
+                for provider in self.external_providers()? {
+                    if let Ok(xaml_type) = provider.GetXamlTypeByFullName(&full_name) {
+                        return Ok(xaml_type);
+                    }
+                }
+                Err(primary_error)
+            }
+        }
     }
 
     fn GetXmlnsDefinitions(&self) -> Result<windows_core::Array<XmlnsDefinition>> {

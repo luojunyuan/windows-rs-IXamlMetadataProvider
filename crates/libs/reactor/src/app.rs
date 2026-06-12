@@ -26,6 +26,18 @@ where
     HOST_SLOT.with(|slot| slot.borrow().as_ref().map(f))
 }
 
+/// Register an additional XAML metadata provider factory for the application shim.
+///
+/// This lets external WinRT component libraries contribute their generated
+/// `IXamlMetadataProvider` implementation while keeping `windows-reactor`
+/// independent from those libraries.
+pub fn register_xaml_metadata_provider_factory<F>(factory: F)
+where
+    F: Fn() -> windows_core::Result<windows_core::IInspectable> + 'static,
+{
+    super::app_shim::register_xaml_metadata_provider_factory(factory);
+}
+
 /// Top-level reactor application; hosts a single root [`Component`].
 pub struct App {
     title: Option<String>,
