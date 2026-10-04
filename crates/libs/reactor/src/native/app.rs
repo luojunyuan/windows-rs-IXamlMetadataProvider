@@ -794,8 +794,45 @@ impl App {
     where
         T: 'static,
     {
+        Self::run_with_metadata_provider(None, startup)
+    }
+
+    /// Runs the application with an additional XAML metadata provider.
+    ///
+    /// The provider is queried before the built-in WinUI controls provider and
+    /// the built-in provider remains the fallback for framework types.
+    pub fn run_with_xaml_metadata_provider<P, F, T>(
+        provider: F,
+        startup: impl FnOnce(&AppContext) -> windows_core::Result<T> + 'static,
+    ) -> windows_core::Result<()>
+    where
+        P: Interface,
+        F: FnOnce() -> windows_core::Result<P> + 'static,
+        T: 'static,
+    {
+        Self::run_with_metadata_provider(
+            Some(Box::new(move || {
+                let provider = provider()?;
+                provider.cast()
+            })),
+            startup,
+        )
+    }
+
+    fn run_with_metadata_provider<T>(
+        additional_provider_factory: Option<
+            Box<dyn FnOnce() -> windows_core::Result<windows_core::IUnknown>>,
+        >,
+        startup: impl FnOnce(&AppContext) -> windows_core::Result<T> + 'static,
+    ) -> windows_core::Result<()>
+    where
+        T: 'static,
+    {
         bootstrap_runtime()?;
         initialize_ui_thread()?;
+        let additional_provider = additional_provider_factory
+            .map(|factory| factory())
+            .transpose()?;
 
         let startup = Rc::new(RefCell::new(Some(startup)));
         let result = Rc::new(RefCell::new(Ok(())));
@@ -834,7 +871,7 @@ impl App {
                 }
                 Ok(())
             });
-            match create_application(on_launched) {
+            match create_application(on_launched, additional_provider.clone()) {
                 Ok(created) => *application.borrow_mut() = Some(created),
                 Err(error) => {
                     *callback_result.borrow_mut() = Err(error);
