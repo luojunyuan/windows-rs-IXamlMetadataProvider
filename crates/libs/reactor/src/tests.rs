@@ -1350,6 +1350,7 @@ fn tooltip_attachment_reconciles_content_and_placement() {
                 Mutation::Create {
                     object,
                     kind: ObjectType::ToolTip,
+                    ..
                 } if *object == tooltip
             )
         })
@@ -1890,6 +1891,7 @@ fn recording_adapter_enforces_tooltip_ownership_transactionally() {
         runtime.adapter_mut().apply(&[Mutation::Replace {
             object: first,
             kind: ObjectType::Border,
+            native: None,
         }]),
         Err(AdapterError::StillOwned(first))
     );
@@ -5405,6 +5407,7 @@ fn subtree_root_type_replacement_preserves_identity() {
         vec![Mutation::Replace {
             object: child,
             kind: ObjectType::Border,
+            native: None,
         }]
     );
     assert_eq!(runtime.graph().kind(child), Some(ObjectType::Border));
@@ -5444,6 +5447,7 @@ fn recording_adapter_rejects_invalid_replacement_batches() {
         runtime.adapter_mut().apply(&[Mutation::Replace {
             object: root,
             kind: ObjectType::Border,
+            native: None,
         }]),
         Err(AdapterError::InvalidReplacement(root))
     );
@@ -5458,6 +5462,7 @@ fn recording_adapter_rejects_invalid_replacement_batches() {
         runtime.adapter_mut().apply(&[Mutation::Replace {
             object: node,
             kind: ObjectType::TextBlock,
+            native: None,
         }]),
         Err(AdapterError::InvalidReplacement(node))
     );

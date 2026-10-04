@@ -54,10 +54,12 @@ pub enum Mutation {
     Create {
         object: ObjectId,
         kind: ObjectType,
+        native: Option<NativeElement>,
     },
     Replace {
         object: ObjectId,
         kind: ObjectType,
+        native: Option<NativeElement>,
     },
     SetProperties {
         object: ObjectId,
@@ -610,6 +612,7 @@ struct RetainedRelation {
 #[derive(Clone, Debug, PartialEq)]
 struct RetainedObject {
     kind: ObjectType,
+    native: Option<NativeElement>,
     key: Option<Key>,
     reference: Option<ElementRef>,
     exit_transition: Option<ExitTransition>,
@@ -1289,6 +1292,7 @@ impl RetainedGraph {
             return Ok(false);
         };
         if current.kind != declaration.kind
+            || current.native != declaration.native
             || (compare_key && current.key != declaration.key)
             || current.reference != declaration.reference
             || current.exit_transition != declaration.exit_transition
@@ -3531,6 +3535,7 @@ impl Planner<'_, '_> {
         let virtual_items = retain_virtual_items(declaration)?;
         *self.retained.get_mut(object) = RetainedObject {
             kind: declaration.kind,
+            native: declaration.native.clone(),
             key,
             reference: declaration.reference.clone(),
             exit_transition: declaration.exit_transition,
@@ -3553,6 +3558,7 @@ impl Planner<'_, '_> {
         self.mutations.push(Mutation::Replace {
             object,
             kind: declaration.kind,
+            native: declaration.native.clone(),
         });
         if !declaration.properties.as_slice().is_empty() {
             self.mutations.push(Mutation::SetProperties {
@@ -3635,6 +3641,7 @@ impl Planner<'_, '_> {
         let virtual_items = retain_virtual_items(declaration)?;
         let object = self.retained.allocate(RetainedObject {
             kind: declaration.kind,
+            native: declaration.native.clone(),
             key: declaration.key.clone(),
             reference: declaration.reference.clone(),
             exit_transition: declaration.exit_transition,
@@ -3666,6 +3673,7 @@ impl Planner<'_, '_> {
         self.mutations.push(Mutation::Create {
             object,
             kind: declaration.kind,
+            native: declaration.native.clone(),
         });
         if !self
             .retained

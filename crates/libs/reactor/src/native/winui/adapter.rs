@@ -63,8 +63,16 @@ impl Adapter for WinUiAdapter {
     fn apply(&mut self, mutations: &[Mutation]) -> Result<(), Self::Error> {
         for mutation in mutations {
             match mutation {
-                Mutation::Create { object, kind } => self.create(*object, *kind)?,
-                Mutation::Replace { object, kind } => self.replace(*object, *kind)?,
+                Mutation::Create {
+                    object,
+                    kind,
+                    native,
+                } => self.create(*object, *kind, native.as_ref())?,
+                Mutation::Replace {
+                    object,
+                    kind,
+                    native,
+                } => self.replace(*object, *kind, native.as_ref())?,
                 Mutation::SetProperties { object, set, clear } => {
                     self.set_properties(*object, set, clear)?;
                 }

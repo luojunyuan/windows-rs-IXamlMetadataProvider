@@ -6,9 +6,42 @@ use std::path::Path;
 use std::rc::Rc;
 use std::sync::Arc;
 use std::time::Duration;
+use windows_core::Interface;
 
 fn validate_uri(value: &str) -> windows_core::Result<()> {
     native::validate_native_uri(value)
+}
+
+/// An existing WinUI `UIElement` that should participate in a Reactor view.
+///
+/// This is intended for controls supplied by a separate WinUI component library. Reactor keeps
+/// the element alive and places it in the normal view tree, while the component owns its setup.
+#[derive(Clone)]
+pub struct NativeElement(windows_core::IInspectable);
+
+impl NativeElement {
+    pub fn new<T: Interface>(value: &T) -> windows_core::Result<Self> {
+        Ok(Self(value.cast()?))
+    }
+
+    pub(crate) fn inspectable(&self) -> &windows_core::IInspectable {
+        &self.0
+    }
+}
+
+impl fmt::Debug for NativeElement {
+    fn fmt(&self, formatter: &mut fmt::Formatter<'_>) -> fmt::Result {
+        formatter
+            .debug_tuple("NativeElement")
+            .field(&self.0.as_raw())
+            .finish()
+    }
+}
+
+impl PartialEq for NativeElement {
+    fn eq(&self, other: &Self) -> bool {
+        self.0.as_raw() == other.0.as_raw()
+    }
 }
 
 #[derive(Clone)]
@@ -1625,6 +1658,7 @@ pub(crate) struct DeclaredAttachments {
 #[derive(Clone, Debug, PartialEq)]
 pub(crate) struct Declaration {
     pub kind: ObjectType,
+    pub native: Option<NativeElement>,
     pub key: Option<Key>,
     pub component: Option<ComponentId>,
     pub reference: Option<ElementRef>,
@@ -1912,6 +1946,7 @@ impl Declaration {
     pub(crate) fn new(kind: ObjectType) -> Self {
         Self {
             kind,
+            native: None,
             key: None,
             component: None,
             reference: None,
@@ -2071,6 +2106,14 @@ impl Declaration {
 
 #[derive(Clone, Debug, PartialEq)]
 pub struct View(pub(crate) DeclaredNode);
+
+impl From<NativeElement> for View {
+    fn from(value: NativeElement) -> Self {
+        let mut declaration = Declaration::new(ObjectType::Border);
+        declaration.native = Some(value);
+        Self(DeclaredNode::Object(declaration))
+    }
+}
 
 pub trait TooltipExt: Into<View> + Sized {
     fn tooltip(self, value: impl AsRef<str>) -> View {

@@ -5225,7 +5225,8 @@ mod tests {
                     mutation,
                     Mutation::Replace {
                         object,
-                        kind: ObjectType::Border
+                        kind: ObjectType::Border,
+                        ..
                     } if Some(*object) == switch_root
                 ))
         );

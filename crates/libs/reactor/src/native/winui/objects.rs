@@ -1,9 +1,16 @@
 impl WinUiAdapter {
-    fn create(&mut self, object: ObjectId, kind: ObjectType) -> Result<(), WinUiError> {
+    fn create(
+        &mut self,
+        object: ObjectId,
+        kind: ObjectType,
+        native_element: Option<&crate::NativeElement>,
+    ) -> Result<(), WinUiError> {
         if self.handles.contains_key(&object) {
             return Err(WinUiError::DuplicateObject(object));
         }
-        let handle = if let Some(handle) =
+        let handle = if let Some(native_element) = native_element {
+            Handle::Native(native_element.inspectable().cast()?)
+        } else if let Some(handle) =
             GeneratedHandle::create(kind, object, &self.event_queue, &self.pending_focus_states)?
         {
             Handle::Generated(handle)
@@ -498,7 +505,12 @@ impl WinUiAdapter {
         Ok(())
     }
 
-    fn replace(&mut self, object: ObjectId, kind: ObjectType) -> Result<(), WinUiError> {
+    fn replace(
+        &mut self,
+        object: ObjectId,
+        kind: ObjectType,
+        native_element: Option<&crate::NativeElement>,
+    ) -> Result<(), WinUiError> {
         if self.tooltips.contains_key(&object)
             || self.tooltip_owners.contains_key(&object)
             || self.flyouts.contains_key(&object)
@@ -560,7 +572,7 @@ impl WinUiAdapter {
         self.encoded_image_failures.remove(&object);
         self.resource_override_keys.remove(&object);
         self.style_states.remove(&object);
-        self.create(object, kind)?;
+        self.create(object, kind, native_element)?;
         let replacement = self.ui_element(object)?;
         if let Some(index) = index {
             self.owned_collection(parent, relation)?

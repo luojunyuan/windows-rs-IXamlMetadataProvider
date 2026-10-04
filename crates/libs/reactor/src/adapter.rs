@@ -328,14 +328,14 @@ impl RecordingAdapter {
     fn apply_batch(&mut self, mutations: &[Mutation]) -> Result<(), AdapterError> {
         for mutation in mutations {
             match mutation {
-                Mutation::Create { object, kind } => {
+                Mutation::Create { object, kind, .. } => {
                     if self.objects.contains_key(object) {
                         return Err(AdapterError::DuplicateObject(*object));
                     }
 
                     self.objects.insert(*object, Self::recorded_object(*kind));
                 }
-                Mutation::Replace { object, kind } => {
+                Mutation::Replace { object, kind, .. } => {
                     let previous = self
                         .objects
                         .get(object)

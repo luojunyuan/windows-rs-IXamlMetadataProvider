@@ -29,6 +29,7 @@ use windows_core::{
 
 enum Handle {
     Generated(GeneratedHandle),
+    Native(native::UIElement),
     TextBox(NativeTextBox),
     TreeView(NativeTreeView),
     TreeNode(NativeTreeNode),

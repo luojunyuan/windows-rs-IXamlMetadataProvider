@@ -774,6 +774,26 @@ impl App {
         Self::run_component_with_policy::<C>(input, WindowPolicy::new())
     }
 
+    /// Runs one MVU component with an additional XAML metadata provider.
+    pub fn run_component_with_xaml_metadata_provider<C, P, F>(
+        provider: F,
+        input: C::Input,
+    ) -> windows_core::Result<()>
+    where
+        C: Component,
+        P: Interface,
+        F: FnOnce() -> windows_core::Result<P> + 'static,
+    {
+        Self::run_with_xaml_metadata_provider::<P, _, _>(provider, move |context| {
+            let application = LiveApplication::new(context, true)?;
+            application.open(component::<C>("root", input), WindowPolicy::new())?;
+            APP_COMPONENT_APPLICATION.with(|current| {
+                assert!(current.borrow_mut().replace(application).is_none());
+            });
+            Ok(())
+        })
+    }
+
     pub fn run_component_with_policy<C: Component>(
         input: C::Input,
         policy: WindowPolicy,
