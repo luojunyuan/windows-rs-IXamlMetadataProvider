@@ -29,12 +29,17 @@ use windows_core::{
 
 enum Handle {
     Generated(GeneratedHandle),
-    Native(native::UIElement),
+    Native(NativeHandle),
     TextBox(NativeTextBox),
     TreeView(NativeTreeView),
     TreeNode(NativeTreeNode),
     ListView(NativeListView),
     Data(windows_collections::IObservableMap<HSTRING, IInspectable>),
+}
+
+struct NativeHandle {
+    value: native::UIElement,
+    element: crate::NativeElement,
 }
 
 struct NativeListView {

@@ -9,7 +9,10 @@ impl WinUiAdapter {
             return Err(WinUiError::DuplicateObject(object));
         }
         let handle = if let Some(native_element) = native_element {
-            Handle::Native(native_element.inspectable().cast()?)
+            Handle::Native(NativeHandle {
+                value: native_element.inspectable()?.cast()?,
+                element: native_element.clone(),
+            })
         } else if let Some(handle) =
             GeneratedHandle::create(kind, object, &self.event_queue, &self.pending_focus_states)?
         {
@@ -235,6 +238,9 @@ impl WinUiAdapter {
                 );
             }
             let result = 'apply: {
+                if let PropertyId::Native(id) = property {
+                    break 'apply self.set_native_property(object, id, None);
+                }
                 match property {
                     PropertyId::Resources => {
                         break 'apply self
@@ -341,6 +347,9 @@ impl WinUiAdapter {
                 );
             }
             let result = 'apply: {
+                if let PropertyId::Native(id) = property.id {
+                    break 'apply self.set_native_property(object, id, Some(&property.value));
+                }
                 match (property.id, &property.value) {
                     (PropertyId::Resources, PropertyValue::ResourceOverrides(value)) => {
                         break 'apply self.set_resource_overrides(object, value);
@@ -503,6 +512,23 @@ impl WinUiAdapter {
             }
         }
         Ok(())
+    }
+
+    fn set_native_property(
+        &self,
+        object: ObjectId,
+        id: crate::NativePropertyId,
+        value: Option<&PropertyValue>,
+    ) -> Result<(), WinUiError> {
+        let Some(Handle::Native(handle)) = self.handles.get(&object) else {
+            return Err(WinUiError::InvalidObject(object));
+        };
+        let native: IInspectable = handle.value.cast()?;
+        handle
+            .element
+            .apply_native_property(&native, id, value)
+            .ok_or(WinUiError::InvalidObject(object))?
+            .map_err(Into::into)
     }
 
     fn replace(

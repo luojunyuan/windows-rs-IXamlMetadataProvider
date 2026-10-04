@@ -2,6 +2,7 @@ use super::*;
 use std::any::TypeId;
 use std::collections::BTreeMap;
 use std::fmt;
+use std::marker::PhantomData;
 use std::path::Path;
 use std::rc::Rc;
 use std::sync::Arc;
@@ -16,33 +17,393 @@ fn validate_uri(value: &str) -> windows_core::Result<()> {
 ///
 /// This is intended for controls supplied by a separate WinUI component library. Reactor keeps
 /// the element alive and places it in the normal view tree, while the component owns its setup.
+type NativePropertyHandler = Rc<
+    dyn Fn(
+        &windows_core::IInspectable,
+        NativePropertyId,
+        Option<&PropertyValue>,
+    ) -> windows_core::Result<()>,
+>;
+
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+enum NativeElementIdentity {
+    Type(TypeId),
+    Key { type_id: TypeId, key: u64 },
+}
+
+enum NativeElementSource {
+    Ready {
+        value: windows_core::IInspectable,
+        property_handler: Option<NativePropertyHandler>,
+    },
+    Deferred {
+        factory: Rc<dyn Fn() -> windows_core::Result<windows_core::IInspectable>>,
+        identity: Option<NativeElementIdentity>,
+        property_handler: Option<NativePropertyHandler>,
+    },
+}
+
 #[derive(Clone)]
-pub struct NativeElement(windows_core::IInspectable);
+pub struct NativeElement {
+    source: Rc<NativeElementSource>,
+    properties: Rc<[Property]>,
+}
 
 impl NativeElement {
     pub fn new<T: Interface>(value: &T) -> windows_core::Result<Self> {
-        Ok(Self(value.cast()?))
+        Ok(Self {
+            source: Rc::new(NativeElementSource::Ready {
+                value: value.cast()?,
+                property_handler: None,
+            }),
+            properties: Rc::from([]),
+        })
     }
 
-    pub(crate) fn inspectable(&self) -> &windows_core::IInspectable {
-        &self.0
+    fn deferred(
+        factory: impl Fn() -> windows_core::Result<windows_core::IInspectable> + 'static,
+    ) -> Self {
+        Self {
+            source: Rc::new(NativeElementSource::Deferred {
+                factory: Rc::new(factory),
+                identity: None,
+                property_handler: None,
+            }),
+            properties: Rc::from([]),
+        }
+    }
+
+    fn deferred_with_properties(
+        factory: impl Fn() -> windows_core::Result<windows_core::IInspectable> + 'static,
+        property_handler: impl Fn(
+            &windows_core::IInspectable,
+            NativePropertyId,
+            Option<&PropertyValue>,
+        ) -> windows_core::Result<()>
+        + 'static,
+        type_id: TypeId,
+    ) -> Self {
+        Self {
+            source: Rc::new(NativeElementSource::Deferred {
+                factory: Rc::new(factory),
+                identity: Some(NativeElementIdentity::Type(type_id)),
+                property_handler: Some(Rc::new(property_handler)),
+            }),
+            properties: Rc::from([]),
+        }
+    }
+
+    fn with_identity(self, key: u64) -> Self {
+        let source = match self.source.as_ref() {
+            NativeElementSource::Ready { .. } => return self,
+            NativeElementSource::Deferred {
+                factory,
+                identity,
+                property_handler,
+            } => {
+                let type_id = identity.map_or(TypeId::of::<()>(), |identity| match identity {
+                    NativeElementIdentity::Type(type_id)
+                    | NativeElementIdentity::Key { type_id, .. } => type_id,
+                });
+                NativeElementSource::Deferred {
+                    factory: Rc::clone(factory),
+                    identity: Some(NativeElementIdentity::Key { type_id, key }),
+                    property_handler: property_handler.clone(),
+                }
+            }
+        };
+        Self {
+            source: Rc::new(source),
+            properties: self.properties,
+        }
+    }
+
+    fn with_property(mut self, id: PropertyId, value: PropertyValue) -> Self {
+        let mut properties = self.properties.to_vec();
+        if let Some(current) = properties.iter_mut().find(|current| current.id == id) {
+            current.value = value;
+        } else {
+            properties.push(Property { id, value });
+        }
+        self.properties = properties.into();
+        self
+    }
+
+    pub(crate) fn properties(&self) -> &[Property] {
+        &self.properties
+    }
+
+    pub(crate) fn inspectable(&self) -> windows_core::Result<windows_core::IInspectable> {
+        match self.source.as_ref() {
+            NativeElementSource::Ready { value, .. } => Ok(value.clone()),
+            NativeElementSource::Deferred { factory, .. } => factory(),
+        }
+    }
+
+    pub(crate) fn apply_native_property(
+        &self,
+        object: &windows_core::IInspectable,
+        id: NativePropertyId,
+        value: Option<&PropertyValue>,
+    ) -> Option<windows_core::Result<()>> {
+        let property_handler = match self.source.as_ref() {
+            NativeElementSource::Ready {
+                property_handler, ..
+            }
+            | NativeElementSource::Deferred {
+                property_handler, ..
+            } => property_handler.as_ref(),
+        }?;
+        Some(property_handler(object, id, value))
     }
 }
 
 impl fmt::Debug for NativeElement {
     fn fmt(&self, formatter: &mut fmt::Formatter<'_>) -> fmt::Result {
-        formatter
-            .debug_tuple("NativeElement")
-            .field(&self.0.as_raw())
-            .finish()
+        match self.source.as_ref() {
+            NativeElementSource::Ready { value, .. } => formatter
+                .debug_tuple("NativeElement")
+                .field(&value.as_raw())
+                .finish(),
+            NativeElementSource::Deferred { .. } => formatter
+                .debug_tuple("NativeElement")
+                .field(&"deferred")
+                .finish(),
+        }
     }
 }
 
 impl PartialEq for NativeElement {
     fn eq(&self, other: &Self) -> bool {
-        self.0.as_raw() == other.0.as_raw()
+        match (self.source.as_ref(), other.source.as_ref()) {
+            (
+                NativeElementSource::Ready { value: left, .. },
+                NativeElementSource::Ready { value: right, .. },
+            ) => left.as_raw() == right.as_raw(),
+            (
+                NativeElementSource::Deferred {
+                    factory: left_factory,
+                    identity: left_identity,
+                    ..
+                },
+                NativeElementSource::Deferred {
+                    factory: right_factory,
+                    identity: right_identity,
+                    ..
+                },
+            ) => match (left_identity, right_identity) {
+                (Some(left), Some(right)) => left == right,
+                (None, None) => Rc::ptr_eq(left_factory, right_factory),
+                _ => false,
+            },
+            _ => false,
+        }
     }
 }
+
+/// A typed wrapper for a native WinUI control supplied by another crate.
+///
+/// `NativeControl` keeps the original WinRT value available while exposing the
+/// control as a normal Reactor [`View`]. This is the extension point for
+/// controls that are not part of Reactor's generated control set.
+#[derive(Clone)]
+pub struct NativeControl<T: Interface> {
+    native: T,
+    element: NativeElement,
+}
+
+impl<T: Interface> NativeControl<T> {
+    /// Wraps an existing WinRT control as a Reactor control.
+    pub fn new(native: T) -> windows_core::Result<Self> {
+        let element = NativeElement::new(&native)?;
+        Ok(Self { native, element })
+    }
+
+    /// Wraps an activated WinRT control with a custom property update callback.
+    pub fn new_with_properties(
+        native: T,
+        property_handler: impl Fn(
+            &T,
+            NativePropertyId,
+            Option<&PropertyValue>,
+        ) -> windows_core::Result<()>
+        + 'static,
+    ) -> windows_core::Result<Self>
+    where
+        T: 'static,
+    {
+        let handler = Rc::new(property_handler);
+        let native_for_handler = native.clone();
+        let element = NativeElement {
+            source: Rc::new(NativeElementSource::Ready {
+                value: native.cast()?,
+                property_handler: Some(Rc::new(move |_, id, value| {
+                    handler(&native_for_handler, id, value)
+                })),
+            }),
+            properties: Rc::from([]),
+        };
+        Ok(Self { native, element })
+    }
+
+    /// Returns the typed WinRT control for additional native configuration.
+    pub fn native(&self) -> &T {
+        &self.native
+    }
+
+    /// Consumes the wrapper and returns the typed WinRT control.
+    pub fn into_native(self) -> T {
+        self.native
+    }
+
+    /// Returns a clone of the underlying Reactor native element.
+    pub fn native_element(&self) -> NativeElement {
+        self.element.clone()
+    }
+
+    /// Consumes the wrapper and returns its untyped Reactor native element.
+    pub fn into_native_element(self) -> NativeElement {
+        self.element
+    }
+
+    /// Converts the control into a Reactor view.
+    pub fn into_view(self) -> View {
+        self.element.into()
+    }
+
+    /// Creates a Reactor declaration whose native control is activated lazily.
+    ///
+    /// The factory runs when Reactor creates the view's native object. This is the
+    /// same lifecycle used by Reactor's generated controls and lets a custom
+    /// control builder return a `View` without exposing activation errors.
+    pub fn deferred(
+        factory: impl Fn() -> windows_core::Result<T> + 'static,
+    ) -> NativeControlFactory<T> {
+        NativeControlFactory::new(factory)
+    }
+
+    /// Creates a lazily activated control whose custom properties update the existing object.
+    pub fn deferred_with_properties(
+        factory: impl Fn() -> windows_core::Result<T> + 'static,
+        property_handler: impl Fn(
+            &T,
+            NativePropertyId,
+            Option<&PropertyValue>,
+        ) -> windows_core::Result<()>
+        + 'static,
+    ) -> NativeControlFactory<T>
+    where
+        T: 'static,
+    {
+        NativeControlFactory::new_with_properties(factory, property_handler)
+    }
+}
+
+impl<T: Interface> AsRef<T> for NativeControl<T> {
+    fn as_ref(&self) -> &T {
+        self.native()
+    }
+}
+
+impl<T: Interface> From<NativeControl<T>> for View {
+    fn from(value: NativeControl<T>) -> Self {
+        value.into_view()
+    }
+}
+
+/// A Reactor declaration for a native control that is created by a factory.
+///
+/// Use [`NativeControl::deferred`] from a custom control builder when native
+/// activation or property setup can fail. The returned value converts directly
+/// into a [`View`], while failures are reported through Reactor's adapter.
+#[derive(Clone)]
+pub struct NativeControlFactory<T: Interface> {
+    element: NativeElement,
+    marker: PhantomData<fn() -> T>,
+}
+
+impl<T: Interface> NativeControlFactory<T> {
+    fn new(factory: impl Fn() -> windows_core::Result<T> + 'static) -> Self {
+        let element = NativeElement::deferred(move || factory()?.cast());
+        Self {
+            element,
+            marker: PhantomData,
+        }
+    }
+
+    fn new_with_properties(
+        factory: impl Fn() -> windows_core::Result<T> + 'static,
+        property_handler: impl Fn(
+            &T,
+            NativePropertyId,
+            Option<&PropertyValue>,
+        ) -> windows_core::Result<()>
+        + 'static,
+    ) -> Self
+    where
+        T: 'static,
+    {
+        let property_handler = Rc::new(property_handler);
+        let element = NativeElement::deferred_with_properties(
+            move || factory()?.cast(),
+            move |object, id, value| {
+                let native = object.cast::<T>()?;
+                property_handler(&native, id, value)
+            },
+            TypeId::of::<T>(),
+        );
+        Self {
+            element,
+            marker: PhantomData,
+        }
+    }
+
+    /// Adds a standard or custom property to the declaration.
+    pub fn property(mut self, id: PropertyId, value: PropertyValue) -> Self {
+        self.element = self.element.with_property(id, value);
+        self
+    }
+
+    /// Adds a property owned by the custom native control.
+    pub fn native_property(self, id: NativePropertyId, value: PropertyValue) -> Self {
+        self.property(PropertyId::Native(id), value)
+    }
+
+    /// Supplies a stable structural identity for this native control declaration.
+    ///
+    /// Property changes keep the existing native object. Change this identity when a builder
+    /// changes the native control's structure and the control must be recreated.
+    pub fn identity(mut self, key: u64) -> Self {
+        self.element = self.element.with_identity(key);
+        self
+    }
+
+    /// Returns the underlying native element declaration.
+    pub fn into_native_element(self) -> NativeElement {
+        self.element
+    }
+
+    /// Converts the declaration into a Reactor view.
+    pub fn into_view(self) -> View {
+        self.element.into()
+    }
+}
+
+impl<T: Interface> From<NativeControlFactory<T>> for View {
+    fn from(value: NativeControlFactory<T>) -> Self {
+        value.into_view()
+    }
+}
+
+/// Extension methods for turning any projected WinRT control into a Reactor control.
+pub trait NativeControlExt: Interface + Sized {
+    /// Wraps this projected control in [`NativeControl`].
+    fn into_reactor(self) -> windows_core::Result<NativeControl<Self>> {
+        NativeControl::new(self)
+    }
+}
+
+impl<T: Interface> NativeControlExt for T {}
 
 #[derive(Clone)]
 pub struct EncodedImage(EncodedImageBytes);
@@ -2109,8 +2470,10 @@ pub struct View(pub(crate) DeclaredNode);
 
 impl From<NativeElement> for View {
     fn from(value: NativeElement) -> Self {
+        let properties = value.properties().iter().cloned().collect();
         let mut declaration = Declaration::new(ObjectType::Border);
         declaration.native = Some(value);
+        declaration.properties = properties;
         Self(DeclaredNode::Object(declaration))
     }
 }

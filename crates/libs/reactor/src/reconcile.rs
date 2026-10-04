@@ -3795,6 +3795,10 @@ impl Planner<'_, '_> {
         declaration: &Declaration,
     ) -> Result<ObjectId, GraphError> {
         debug_assert_eq!(self.retained.get(object).unwrap().kind, declaration.kind);
+        if self.retained.get(object).unwrap().native != declaration.native {
+            self.replace_object(object, declaration)?;
+            return Ok(object);
+        }
         if self.retained.get(object).unwrap().reference != declaration.reference {
             if let Some(reference) = self.retained.get_mut(object).reference.take() {
                 self.references

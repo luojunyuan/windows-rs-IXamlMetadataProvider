@@ -480,7 +480,7 @@ impl WinUiAdapter {
             .ok_or(WinUiError::MissingObject(object))?
         {
             Handle::Generated(value) => value.ui_element(),
-            Handle::Native(value) => Ok(value.clone()),
+            Handle::Native(value) => Ok(value.value.clone()),
             Handle::TextBox(value) => Ok(value.value.cast()?),
             Handle::TreeView(value) => Ok(value.value.cast()?),
             Handle::ListView(value) => Ok(value.value.cast()?),
@@ -494,7 +494,7 @@ impl WinUiAdapter {
             .get(&object)
             .ok_or(WinUiError::MissingObject(object))?
         {
-            Handle::Native(value) => Ok(value.cast()?),
+            Handle::Native(value) => Ok(value.value.cast()?),
             Handle::Data(value) => Ok(value.cast()?),
             _ => Err(WinUiError::InvalidObject(object)),
         }

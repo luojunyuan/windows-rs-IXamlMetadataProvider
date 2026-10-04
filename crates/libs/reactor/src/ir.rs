@@ -342,6 +342,9 @@ fn child_object(child: &DeclaredNode) -> Result<&Declaration, GraphError> {
 }
 
 pub(crate) fn validate_property(kind: ObjectType, property: &Property) -> Result<(), GraphError> {
+    if matches!(property.id, PropertyId::Native(_)) {
+        return Ok(());
+    }
     let contract = property_contract(kind, property.id)
         .ok_or(GraphError::InvalidProperty(kind, property.id))?;
     let valid = match (contract.value, &property.value) {
