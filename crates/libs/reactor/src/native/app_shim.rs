@@ -9,20 +9,21 @@ implement_decl! {
 
 pub struct ReactorApplicationOverrides {
     controls_provider: RefCell<Option<XamlControlsXamlMetaDataProvider>>,
-    additional_provider: Option<IXamlMetadataProvider>,
+    additional_provider: RefCell<Option<IXamlMetadataProvider>>,
+    additional_provider_factory:
+        RefCell<Option<Box<dyn FnOnce() -> Result<IUnknown>>>>,
     on_launched: RefCell<Option<Box<dyn FnOnce() -> Result<()>>>>,
 }
 
 impl ReactorApplicationOverrides {
     fn new(
         on_launched: Box<dyn FnOnce() -> Result<()>>,
-        additional_provider: Option<IUnknown>,
+        additional_provider_factory: Option<Box<dyn FnOnce() -> Result<IUnknown>>>,
     ) -> Result<Self> {
         Ok(Self {
             controls_provider: RefCell::new(None),
-            additional_provider: additional_provider
-                .map(|provider| provider.cast())
-                .transpose()?,
+            additional_provider: RefCell::new(None),
+            additional_provider_factory: RefCell::new(additional_provider_factory),
             on_launched: RefCell::new(Some(on_launched)),
         })
     }
@@ -39,6 +40,10 @@ impl ReactorApplicationOverrides {
 
 impl IApplicationOverrides_Impl for ReactorApplicationOverrides_Impl {
     fn OnLaunched(&self, _args: Ref<LaunchActivatedEventArgs>) -> Result<()> {
+        if let Some(factory) = self.additional_provider_factory.borrow_mut().take() {
+            let provider = factory()?.cast()?;
+            *self.additional_provider.borrow_mut() = Some(provider);
+        }
         if let Some(on_launched) = self.on_launched.borrow_mut().take() {
             on_launched()?;
         }
@@ -48,19 +53,19 @@ impl IApplicationOverrides_Impl for ReactorApplicationOverrides_Impl {
 
 impl IXamlMetadataProvider_Impl for ReactorApplicationOverrides_Impl {
     fn GetXamlType(&self, r#type: &TypeName) -> Result<IXamlType> {
-        if let Some(provider) = &self.additional_provider {
-            if let Ok(xaml_type) = provider.GetXamlType(r#type) {
-                return Ok(xaml_type);
-            }
+        if let Some(provider) = self.additional_provider.borrow().clone()
+            && let Ok(xaml_type) = provider.GetXamlType(r#type)
+        {
+            return Ok(xaml_type);
         }
         self.provider()?.GetXamlType(r#type)
     }
 
     fn GetXamlTypeByFullName(&self, full_name: &HSTRING) -> Result<IXamlType> {
-        if let Some(provider) = &self.additional_provider {
-            if let Ok(xaml_type) = provider.GetXamlTypeByFullName(&full_name.to_string_lossy()) {
-                return Ok(xaml_type);
-            }
+        if let Some(provider) = self.additional_provider.borrow().clone()
+            && let Ok(xaml_type) = provider.GetXamlTypeByFullName(&full_name.to_string_lossy())
+        {
+            return Ok(xaml_type);
         }
         self.provider()?
             .GetXamlTypeByFullName(&full_name.to_string_lossy())
@@ -68,7 +73,7 @@ impl IXamlMetadataProvider_Impl for ReactorApplicationOverrides_Impl {
 
     fn GetXmlnsDefinitions(&self) -> Result<Array<XmlnsDefinition>> {
         let controls = self.provider()?.GetXmlnsDefinitions()?;
-        let Some(provider) = &self.additional_provider else {
+        let Some(provider) = self.additional_provider.borrow().clone() else {
             return Ok(controls);
         };
         let additional = provider.GetXmlnsDefinitions()?;
@@ -81,11 +86,11 @@ impl IXamlMetadataProvider_Impl for ReactorApplicationOverrides_Impl {
 
 pub(super) fn create_application(
     on_launched: Box<dyn FnOnce() -> Result<()>>,
-    additional_provider: Option<IUnknown>,
+    additional_provider_factory: Option<Box<dyn FnOnce() -> Result<IUnknown>>>,
 ) -> Result<Application> {
     Application::compose(ReactorApplicationOverrides::new(
         on_launched,
-        additional_provider,
+        additional_provider_factory,
     )?)
 }
 

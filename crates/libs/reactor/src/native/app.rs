@@ -850,9 +850,7 @@ impl App {
     {
         bootstrap_runtime()?;
         initialize_ui_thread()?;
-        let additional_provider = additional_provider_factory
-            .map(|factory| factory())
-            .transpose()?;
+        let additional_provider_factory = Rc::new(RefCell::new(additional_provider_factory));
 
         let startup = Rc::new(RefCell::new(Some(startup)));
         let result = Rc::new(RefCell::new(Ok(())));
@@ -862,6 +860,11 @@ impl App {
             let launch_application = Rc::clone(&application);
             let launch_startup = Rc::clone(&startup);
             let launch_result = Rc::clone(&callback_result);
+            let additional_provider = additional_provider_factory
+                .borrow_mut()
+                .take()
+                .map(|factory| factory())
+                .transpose();
             let on_launched = Box::new(move || {
                 let launched = (|| {
                     let application = launch_application
@@ -891,8 +894,14 @@ impl App {
                 }
                 Ok(())
             });
-            match create_application(on_launched, additional_provider.clone()) {
-                Ok(created) => *application.borrow_mut() = Some(created),
+            match additional_provider {
+                Ok(additional_provider) => match create_application(on_launched, additional_provider) {
+                    Ok(created) => *application.borrow_mut() = Some(created),
+                    Err(error) => {
+                        *callback_result.borrow_mut() = Err(error);
+                        exit_ui_thread();
+                    }
+                },
                 Err(error) => {
                     *callback_result.borrow_mut() = Err(error);
                     exit_ui_thread();
